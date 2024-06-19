@@ -1,4 +1,5 @@
 import cv2
+import math
 import torch
 import numpy as np
 from tqdm import tqdm
@@ -6,7 +7,7 @@ from loss import SRLoss
 from datasets import VideoDatasets
 from torch.utils.data import DataLoader
 import torchvision.transforms as transforms
-from model_mini import Generator, Descriminator
+from model_s import Generator, Descriminator
 
 
 if __name__ == '__main__':
@@ -14,12 +15,12 @@ if __name__ == '__main__':
     batch_size = 1
 
     G_model = Generator().to(device)
-    # G_model.load_state_dict(torch.load('weights/com_796.pth', map_location='cuda'))
+    # G_model.load_state_dict(torch.load('weights/sr_1.pth', map_location=device))
     D_model = Descriminator().to(device)
-    # D_model.load_state_dict(torch.load('weights/com_796_des.pth', map_location='cuda'))
+    # D_model.load_state_dict(torch.load('weights/sr_1_des.pth', map_location=device))
     model_test = Generator()
 
-    LR_G, LR_D = 3e-4, 1e-5
+    LR_G, LR_D = 3e-4, 1e-4
     optimizer_G = torch.optim.Adam(G_model.parameters(), lr=LR_G)
     optimizer_D = torch.optim.Adam(D_model.parameters(), lr=LR_D)
 
@@ -33,18 +34,24 @@ if __name__ == '__main__':
 
     for epoch in range(0, 2000):
         train_loss, val_loss, g_losses, d_losses, l2_losses = 0, 0, [], [], []
-        for frame_large,frame_small in tqdm(train_loader, leave=False):
+        for frame_large, frame_small in tqdm(train_loader, leave=False):
             frame_small = frame_small.to(device)
             frame_large = frame_large.to(device)
             img_generated = G_model(frame_small)  # 生成图
 
             l2_loss = criterion(frame_large, img_generated)
 
+            if math.isnan(l2_loss.item()):
+                continue
+
             des_true = D_model(frame_large)
             des_generated = D_model(img_generated)
 
             G_loss = l2_loss-0.001/torch.mean(torch.log(1.-des_generated))
             D_loss = -torch.mean(torch.log(des_true)+torch.log(1-des_generated))
+
+            if math.isinf(D_loss.item()):
+                continue
 
             optimizer_G.zero_grad()
             G_loss.backward(retain_graph=True)
@@ -72,11 +79,9 @@ if __name__ == '__main__':
         model_test.eval()
 
         dataset = VideoDatasets()
-        frame_large,frame_small = dataset.__getitem__(np.random.randint(0,500))
+        frame_large, frame_small = dataset.__getitem__(np.random.randint(0, 50))
 
         pred = model_test(frame_small.unsqueeze(0)).squeeze()
-        pred = torch.permute(pred, (2,1,0)).detach().numpy()*255
-        frame = cv2.cvtColor(pred, cv2.COLOR_RGB2BGR)
+        pred = torch.permute(pred, (2, 1, 0)).detach().numpy()*255
+        frame = pred.astype(np.uint8)
         cv2.imwrite(f"/tmp/sr_{epoch}.jpg", frame)
-        # cv2.imwrite(f"sr_{epoch}.jpg", frame)
-

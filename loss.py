@@ -98,13 +98,13 @@ class SRLoss(nn.Module):
         self.std = torch.tensor([0.229, 0.224, 0.225]).view(1, -1, 1, 1).to(device)
 
     def forward(self, label, out):
-        # loss_l1 = self.loss_l1(label, out)
+        # label=label[:,:,:out.shape[2],:out.shape[3]] #尺寸对齐
+        loss_l1 = self.loss_l1(label, out)
         loss_fft=0.00001*self.loss_fft(label,out)
-       
         # label = label[0].permute(1, 0, 2, 3)
         # out = out[0].permute(1, 0, 2, 3)
         label = (label - self.mean) / self.std
         out = (out - self.mean) / self.std
 
         loss_feature = self.loss_perpetual(label, out)
-        return loss_feature+loss_fft#+loss_hsv
+        return loss_feature+loss_fft+loss_l1
