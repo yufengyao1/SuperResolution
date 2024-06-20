@@ -2,6 +2,30 @@ import torch
 import torch.nn as nn
 
 
+class InvertedResidual(nn.Module):
+    def __init__(self, inp, oup, stride, use_res_connect, expand_ratio=1):
+        super(InvertedResidual, self).__init__()
+        self.stride = stride
+        assert stride in [1, 2]
+        self.use_res_connect = use_res_connect
+        self.conv = nn.Sequential(
+            nn.Conv2d(inp, inp * expand_ratio, 1, 1, 0, bias=False),
+            # nn.BatchNorm2d(inp * expand_ratio),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(inp * expand_ratio, inp * expand_ratio, 3, stride, 1, groups=inp * expand_ratio, bias=False),
+            # nn.BatchNorm2d(inp * expand_ratio),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(inp * expand_ratio, oup, 1, 1, 0, bias=False),
+            # nn.BatchNorm2d(oup)
+        )
+
+    def forward(self, x):
+        if self.use_res_connect:
+            return x + self.conv(x)
+        else:
+            return self.conv(x)
+
+
 class DoubleConv(nn.Module):
     def __init__(self, in_ch, out_ch):
         super(DoubleConv, self).__init__()
@@ -13,51 +37,55 @@ class DoubleConv(nn.Module):
         )
 
     def forward(self, x):
-        return self.conv(x)
+        y = self.conv(x)
+        return x+y
 
 
 class Generator(nn.Module):
     def __init__(self):
         super(Generator, self).__init__()
-        self.conv_0 = DoubleConv(3, 128)
+        self.block_1 = InvertedResidual(3, 128, 1, False)
         self.up_1 = nn.ConvTranspose2d(128, 128, 2, stride=2)
-        self.conv_1 = DoubleConv(131, 131)
+        self.block_2 = InvertedResidual(131, 131, 1, True)
+        self.block_3 = InvertedResidual(131, 131, 1, True)
         self.up_2 = nn.ConvTranspose2d(131, 131, 2, stride=2)
-        self.conv_2 = DoubleConv(134, 134)
-        self.output = nn.Conv2d(134, 3, 1)
+        self.block_4 = InvertedResidual(134, 134, 1, True)
+        self.block_5 = InvertedResidual(134, 134, 1, True)
+        self.output = InvertedResidual(134, 3, 1, False)
         self.upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
 
-    def forward(self, x):  # [1, 3, 256, 256]
-        x_2 = self.upsample(x)
-        x_4 = self.upsample(x_2)
+    def forward(self, x):
+        x2 = self.upsample(x)
+        x4 = self.upsample(x2)
 
-        x = self.conv_0(x)  # [1, 64, 256, 256]
+        x = self.block_1(x)
 
-        x = self.up_1(x)  # [1, 64, 512, 512]
-        x = torch.concat((x_2, x), dim=1)
-        x = self.conv_1(x)  # [1, 64, 512, 512]
+        x = self.up_1(x)
+        x = torch.concat((x2, x), dim=1)
+        x = self.block_2(x)
+        x = self.block_3(x)
 
-        x = self.up_2(x)  # [1, 64, 1024, 1024]
-        x = torch.concat((x_4, x), dim=1)
-        x = self.conv_2(x)  # [1, 64, 1024, 1024]
+        x = self.up_2(x)
+        x = torch.concat((x4, x), dim=1)
+        x = self.block_4(x)
+        x = self.block_5(x)
 
-        x = self.output(x)  # [1, 3, 1024, 1024]
+        x = self.output(x)
         return x
 
 
 class Descriminator(nn.Module):
     def __init__(self):
         super(Descriminator, self).__init__()
-
-        self.conv1 = DoubleConv(3, 16)
+        self.conv1 = InvertedResidual(3, 16, 1, False)
         self.pool1 = nn.MaxPool2d(2)
-        self.conv2 = DoubleConv(16, 32)
+        self.conv2 = InvertedResidual(16, 32, 1, False)
         self.pool2 = nn.MaxPool2d(2)
-        self.conv3 = DoubleConv(32, 64)
+        self.conv3 = InvertedResidual(32, 64, 1, False)
         self.pool3 = nn.MaxPool2d(2)
-        self.conv4 = DoubleConv(64, 64)
+        self.conv4 = InvertedResidual(64, 64, 1, True)
         self.pool4 = nn.MaxPool2d(2)
-        self.conv5 = DoubleConv(64, 64)
+        self.conv5 = InvertedResidual(64, 64, 1, True)
         self.fc6 = nn.Linear(64, 1)
         self.sigmoid = nn.Sigmoid()
         self.adaptive_pool = nn.AdaptiveAvgPool2d(1)
@@ -80,7 +108,11 @@ class Descriminator(nn.Module):
 
 
 if __name__ == "__main__":
-    inputs = torch.rand(1, 3, 512, 240)
-    net = Generator()
-    outputs = net.forward(inputs)
+    from thop import profile
+    inputs = torch.rand(1, 3, 256, 256)
+    model = Generator()
+    outputs = model.forward(inputs)
     print(outputs.size())
+    # flops, params = profile(model, inputs=(input, ))
+    # print(f'FLOPs: {flops}')
+    # print(f'Params: {params}')
